@@ -1,18 +1,16 @@
 """
 Flask Web API — Data Redundancy Removal System
+Database: AWS RDS MySQL
 Run: python app.py
-Then open: http://localhost:5000
 """
 
 from flask import Flask, request, jsonify, send_from_directory
 from redundancy_system import init_db, add_entry, get_all_records, get_logs, get_stats
-import os
 
 app = Flask(__name__, static_folder="static")
-DB_PATH = "data_store.db"
 
-# Initialize DB on startup
-init_db(DB_PATH)
+# Initialize AWS RDS tables on startup
+init_db()
 
 
 @app.route("/")
@@ -26,23 +24,23 @@ def api_add():
     content = data.get("content", "").strip()
     if not content:
         return jsonify({"error": "Content cannot be empty"}), 400
-    result = add_entry(content, DB_PATH)
+    result = add_entry(content)
     return jsonify(result)
 
 
 @app.route("/api/records", methods=["GET"])
 def api_records():
-    return jsonify(get_all_records(DB_PATH))
+    return jsonify(get_all_records())
 
 
 @app.route("/api/logs", methods=["GET"])
 def api_logs():
-    return jsonify(get_logs(DB_PATH))
+    return jsonify(get_logs())
 
 
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
-    return jsonify(get_stats(DB_PATH))
+    return jsonify(get_stats())
 
 
 if __name__ == "__main__":
