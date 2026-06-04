@@ -47,4 +47,4 @@ def api_stats():
 
 if __name__ == "__main__":
     print("\n🚀 Server starting at http://localhost:5000\n")
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=10000, debug=False)
