@@ -2,49 +2,75 @@
 Data Redundancy Removal System
 Task 1 - Internship Project
 Language: Python 3
+Database: AWS RDS MySQL
 """
 
-import sqlite3
 import hashlib
-import json
+import os
 from datetime import datetime
 from difflib import SequenceMatcher
+import mysql.connector
+from mysql.connector import Error
+
+
+# ─────────────────────────────────────────────
+#  DATABASE CONNECTION
+# ─────────────────────────────────────────────
+
+def get_connection():
+    """
+    Create and return a connection to AWS RDS MySQL.
+    Reads credentials from environment variables (never hardcode them).
+    """
+    try:
+        conn = mysql.connector.connect(
+            host     = os.environ.get("DB_HOST"),       # AWS RDS endpoint
+            port     = int(os.environ.get("DB_PORT", 3306)),
+            user     = os.environ.get("DB_USER"),       # master username
+            password = os.environ.get("DB_PASSWORD"),   # master password
+            database = os.environ.get("DB_NAME"),       # database name
+        )
+        return conn
+    except Error as e:
+        print(f"[DB ERROR] Could not connect to AWS RDS: {e}")
+        raise
 
 
 # ─────────────────────────────────────────────
 #  DATABASE SETUP
 # ─────────────────────────────────────────────
 
-def init_db(db_path="data_store.db"):
-    """Create the SQLite database and required tables."""
-    conn = sqlite3.connect(db_path)
+def init_db():
+    """Create the required tables in AWS RDS MySQL if they don't exist."""
+    conn = get_connection()
     cursor = conn.cursor()
 
-    # Main table: stores unique, verified records
+    # Main table: stores only unique, verified records
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS unique_records (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            data_hash   TEXT UNIQUE NOT NULL,
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            data_hash   VARCHAR(64) UNIQUE NOT NULL,
             content     TEXT NOT NULL,
-            category    TEXT NOT NULL,
-            added_at    TEXT NOT NULL
+            category    VARCHAR(100) NOT NULL,
+            added_at    DATETIME NOT NULL
         )
     """)
 
-    # Log table: tracks every insertion attempt and its result
+    # Log table: tracks every insertion attempt and its outcome
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS insertion_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            content     TEXT NOT NULL,
-            status      TEXT NOT NULL,   -- ACCEPTED | REDUNDANT | FALSE_POSITIVE
-            reason      TEXT,
-            attempted_at TEXT NOT NULL
+            id           INT AUTO_INCREMENT PRIMARY KEY,
+            content      TEXT NOT NULL,
+            status       VARCHAR(20) NOT NULL,
+            reason       TEXT,
+            attempted_at DATETIME NOT NULL
         )
     """)
 
     conn.commit()
+    cursor.close()
     conn.close()
-    print("[DB] Database initialized successfully.")
+    print("[DB] AWS RDS MySQL — Tables initialized successfully.")
 
 
 # ─────────────────────────────────────────────
@@ -62,22 +88,25 @@ def similarity_score(a: str, b: str) -> float:
     return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
 
 
-def classify_entry(content: str, db_path="data_store.db") -> dict:
+def classify_entry(content: str) -> dict:
     """
     Classify incoming data as:
       - REDUNDANT      → exact duplicate (same hash)
-      - FALSE_POSITIVE → near-duplicate (high similarity but not identical)
+      - FALSE_POSITIVE → near-duplicate (similarity >= 85%)
       - UNIQUE         → genuinely new data
     """
-    conn = sqlite3.connect(db_path)
+    conn = get_connection()
     cursor = conn.cursor()
 
     new_hash = compute_hash(content)
 
-    # Step 1: Exact match check
-    cursor.execute("SELECT content FROM unique_records WHERE data_hash = ?", (new_hash,))
+    # Step 1: Exact hash match check
+    cursor.execute(
+        "SELECT content FROM unique_records WHERE data_hash = %s", (new_hash,)
+    )
     exact = cursor.fetchone()
     if exact:
+        cursor.close()
         conn.close()
         return {
             "status": "REDUNDANT",
@@ -85,14 +114,15 @@ def classify_entry(content: str, db_path="data_store.db") -> dict:
             "similar_to": exact[0]
         }
 
-    # Step 2: Fuzzy/near-duplicate check
+    # Step 2: Fuzzy / near-duplicate check
     cursor.execute("SELECT content FROM unique_records")
     all_records = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     for (existing,) in all_records:
         score = similarity_score(content, existing)
-        if score >= 0.85:   # 85% similarity threshold
+        if score >= 0.85:
             return {
                 "status": "FALSE_POSITIVE",
                 "reason": f"Near-duplicate detected (similarity: {score:.0%}).",
@@ -106,37 +136,38 @@ def classify_entry(content: str, db_path="data_store.db") -> dict:
     }
 
 
-def add_entry(content: str, db_path="data_store.db") -> dict:
+def add_entry(content: str) -> dict:
     """
-    Validate and add a new entry.
+    Validate and add a new entry to AWS RDS MySQL.
     Only UNIQUE entries are saved to unique_records.
-    All attempts are logged.
+    All attempts are always logged to insertion_log.
     """
     if not content or not content.strip():
         return {"status": "ERROR", "reason": "Empty content rejected."}
 
-    classification = classify_entry(content, db_path)
+    classification = classify_entry(content)
     status = classification["status"]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = sqlite3.connect(db_path)
+    conn = get_connection()
     cursor = conn.cursor()
 
-    # Log every attempt regardless of outcome
-    cursor.execute("""
-        INSERT INTO insertion_log (content, status, reason, attempted_at)
-        VALUES (?, ?, ?, ?)
-    """, (content, status, classification["reason"], timestamp))
+    # Always log every attempt
+    cursor.execute(
+        "INSERT INTO insertion_log (content, status, reason, attempted_at) VALUES (%s, %s, %s, %s)",
+        (content, status, classification["reason"], timestamp)
+    )
 
-    # Only insert if truly unique
+    # Only write to unique_records if truly unique
     if status == "UNIQUE":
         data_hash = compute_hash(content)
-        cursor.execute("""
-            INSERT INTO unique_records (data_hash, content, category, added_at)
-            VALUES (?, ?, ?, ?)
-        """, (data_hash, content.strip(), "general", timestamp))
+        cursor.execute(
+            "INSERT INTO unique_records (data_hash, content, category, added_at) VALUES (%s, %s, %s, %s)",
+            (data_hash, content.strip(), "general", timestamp)
+        )
 
     conn.commit()
+    cursor.close()
     conn.close()
 
     return {
@@ -147,39 +178,52 @@ def add_entry(content: str, db_path="data_store.db") -> dict:
     }
 
 
-def get_all_records(db_path="data_store.db") -> list:
-    """Fetch all unique records from the database."""
-    conn = sqlite3.connect(db_path)
+def get_all_records() -> list:
+    """Fetch all unique records from AWS RDS MySQL."""
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, content, category, added_at FROM unique_records ORDER BY id DESC")
+    cursor.execute(
+        "SELECT id, content, category, added_at FROM unique_records ORDER BY id DESC"
+    )
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
-    return [{"id": r[0], "content": r[1], "category": r[2], "added_at": r[3]} for r in rows]
+    return [{"id": r[0], "content": r[1], "category": r[2], "added_at": str(r[3])} for r in rows]
 
 
-def get_logs(db_path="data_store.db") -> list:
-    """Fetch all insertion attempt logs."""
-    conn = sqlite3.connect(db_path)
+def get_logs() -> list:
+    """Fetch all insertion attempt logs from AWS RDS MySQL."""
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, content, status, reason, attempted_at FROM insertion_log ORDER BY id DESC")
+    cursor.execute(
+        "SELECT id, content, status, reason, attempted_at FROM insertion_log ORDER BY id DESC"
+    )
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
-    return [{"id": r[0], "content": r[1], "status": r[2], "reason": r[3], "attempted_at": r[4]} for r in rows]
+    return [{"id": r[0], "content": r[1], "status": r[2], "reason": r[3], "attempted_at": str(r[4])} for r in rows]
 
 
-def get_stats(db_path="data_store.db") -> dict:
-    """Return summary statistics."""
-    conn = sqlite3.connect(db_path)
+def get_stats() -> dict:
+    """Return summary statistics from AWS RDS MySQL."""
+    conn = get_connection()
     cursor = conn.cursor()
+
     cursor.execute("SELECT COUNT(*) FROM unique_records")
     unique_count = cursor.fetchone()[0]
+
     cursor.execute("SELECT COUNT(*) FROM insertion_log WHERE status='REDUNDANT'")
     redundant_count = cursor.fetchone()[0]
+
     cursor.execute("SELECT COUNT(*) FROM insertion_log WHERE status='FALSE_POSITIVE'")
     fp_count = cursor.fetchone()[0]
+
     cursor.execute("SELECT COUNT(*) FROM insertion_log")
     total_attempts = cursor.fetchone()[0]
+
+    cursor.close()
     conn.close()
+
     return {
         "total_attempts": total_attempts,
         "unique_stored": unique_count,
@@ -194,8 +238,7 @@ def get_stats(db_path="data_store.db") -> dict:
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    DB = "data_store.db"
-    init_db(DB)
+    init_db()
 
     print("\n" + "="*55)
     print("   DATA REDUNDANCY REMOVAL SYSTEM — TEST RUN")
@@ -204,33 +247,24 @@ if __name__ == "__main__":
     test_entries = [
         "John Doe, john@example.com, +91-9876543210",
         "Jane Smith, jane@example.com, +91-9123456789",
-        "John Doe, john@example.com, +91-9876543210",   # exact duplicate
-        "John doe, john@example.com, +91-9876543210",   # near-duplicate
+        "John Doe, john@example.com, +91-9876543210",    # exact duplicate
+        "John doe, john@example.com, +91-9876543210",    # near-duplicate
         "Alice Johnson, alice@company.org, +1-555-0101",
-        "Jane Smith, jane@example.com, +91-9123456789", # exact duplicate
+        "Jane Smith, jane@example.com, +91-9123456789",  # exact duplicate
         "Bob Martin, bob.martin@work.net, +44-7911-123456",
         "Alice Johnsonn, alice@company.org, +1-555-0101", # near-duplicate typo
     ]
 
     for entry in test_entries:
-        result = add_entry(entry, DB)
+        result = add_entry(entry)
         icon = "✅" if result["status"] == "UNIQUE" else ("🔴" if result["status"] == "REDUNDANT" else "⚠️")
-        print(f"\n{icon} [{result['status']}] \"{entry[:45]}...\"" if len(entry) > 45 else f"\n{icon} [{result['status']}] \"{entry}\"")
+        print(f"\n{icon} [{result['status']}] \"{entry}\"")
         print(f"   → {result['reason']}")
         if result["similar_to"]:
             print(f"   → Similar to: \"{result['similar_to'][:50]}\"")
 
     print("\n" + "="*55)
-    print("   FINAL STATISTICS")
-    print("="*55)
-    stats = get_stats(DB)
+    stats = get_stats()
     for k, v in stats.items():
-        print(f"  {k.replace('_', ' ').title():<28}: {v}")
-
-    print("\n" + "="*55)
-    print("   UNIQUE RECORDS IN DATABASE")
-    print("="*55)
-    for rec in get_all_records(DB):
-        print(f"  [{rec['id']}] {rec['content']}")
-
-    print("\n✅ System working correctly. Run app.py to launch the web dashboard.\n")
+        print(f"  {k.replace('_',' ').title():<28}: {v}")
+    print("\n✅ Done. Run app.py to launch the dashboard.\n")
