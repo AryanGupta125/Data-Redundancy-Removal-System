@@ -1,6 +1,5 @@
 """
 Data Redundancy Removal System
-Task 1 - Internship Project
 Language: Python 3
 Database: AWS RDS MySQL
 """
@@ -13,12 +12,9 @@ import mysql.connector
 from mysql.connector import Error
 
 
-# ─────────────────────────────────────────────
 #  DATABASE CONNECTION
-# ─────────────────────────────────────────────
 
 def get_connection():
-    """Connect to AWS RDS MySQL using environment variables."""
     try:
         conn = mysql.connector.connect(
             host     = os.environ.get("DB_HOST"),
@@ -33,9 +29,7 @@ def get_connection():
         raise
 
 
-# ─────────────────────────────────────────────
 #  DATABASE SETUP
-# ─────────────────────────────────────────────
 
 def init_db():
     """
@@ -92,9 +86,7 @@ def init_db():
     print("[DB] AWS RDS MySQL — Tables initialized successfully.")
 
 
-# ─────────────────────────────────────────────
 #  CORE FUNCTIONS
-# ─────────────────────────────────────────────
 
 def compute_hash(content: str) -> str:
     """Generate a SHA-256 hash for a given string (normalized)."""
