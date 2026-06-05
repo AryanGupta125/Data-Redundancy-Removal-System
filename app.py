@@ -9,7 +9,6 @@ from redundancy_system import init_db, add_entry, get_all_records, get_logs, get
 
 app = Flask(__name__, static_folder="static")
 
-# Initialize AWS RDS tables on startup
 init_db()
 
 
