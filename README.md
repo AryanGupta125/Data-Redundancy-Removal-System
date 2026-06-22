@@ -1,7 +1,7 @@
 # Data-Redundancy-Removal-System
 A cloud-hosted data deduplication system that protects database integrity by filtering out redundant records through a multi-layered verification pipeline. It combines SHA-256 cryptographic hashing for exact-match blocking with fuzzy matching logic to detect and eliminate near-duplicate entries in real-time.
 
-Live Public URL of this Project - https://data-redundancy-removal-system-vnrv.onrender.com/
+Live Public URL of this Project - https://data-redundancy-removal-system.vercel.app/
 
 # Data Redundancy Removal System
 
