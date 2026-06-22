@@ -5,7 +5,7 @@ Run: python app.py
 """
 
 from flask import Flask, request, jsonify, send_from_directory
-from redundancy_system import init_db, add_entry, get_all_records, get_logs, get_stats
+from api.redundancy_system import init_db, add_entry, get_all_records, get_logs, get_stats
 
 import os
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), "..", "static"))
